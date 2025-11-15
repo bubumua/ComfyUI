@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import socket
 import time
 import uuid
 from dataclasses import dataclass
@@ -17,9 +16,9 @@ from pydantic import BaseModel
 
 from comfy import utils
 from comfy_api.latest import IO
-from comfy_api_nodes.apis import request_logger
 from server import PromptServer
 
+from . import request_logger
 from ._helpers import (
     default_base_url,
     get_auth_header,
@@ -78,8 +77,8 @@ class _PollUIState:
 
 
 _RETRY_STATUS = {408, 429, 500, 502, 503, 504}
-COMPLETED_STATUSES = ["succeeded", "succeed", "success", "completed"]
-FAILED_STATUSES = ["cancelled", "canceled", "failed", "error"]
+COMPLETED_STATUSES = ["succeeded", "succeed", "success", "completed", "finished", "done"]
+FAILED_STATUSES = ["cancelled", "canceled", "fail", "failed", "error"]
 QUEUED_STATUSES = ["created", "queued", "queueing", "submitted"]
 
 
@@ -456,24 +455,20 @@ async def _diagnose_connectivity() -> dict[str, bool]:
     results = {
         "internet_accessible": False,
         "api_accessible": False,
-        "is_local_issue": False,
-        "is_api_issue": False,
     }
     timeout = aiohttp.ClientTimeout(total=5.0)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        try:
+        with contextlib.suppress(ClientError, OSError):
             async with session.get("https://www.google.com") as resp:
                 results["internet_accessible"] = resp.status < 500
-        except (ClientError, asyncio.TimeoutError, socket.gaierror):
-            results["is_local_issue"] = True
+        if not results["internet_accessible"]:
             return results
 
         parsed = urlparse(default_base_url())
         health_url = f"{parsed.scheme}://{parsed.netloc}/health"
-        with contextlib.suppress(ClientError, asyncio.TimeoutError):
+        with contextlib.suppress(ClientError, OSError):
             async with session.get(health_url) as resp:
                 results["api_accessible"] = resp.status < 500
-    results["is_api_issue"] = results["internet_accessible"] and not results["api_accessible"]
     return results
 
 
@@ -594,7 +589,7 @@ async def _request_base(cfg: _RequestConfig, expect_binary: bool):
         operation_id = _generate_operation_id(method, cfg.endpoint.path, attempt)
         logging.debug("[DEBUG] HTTP %s %s (attempt %d)", method, url, attempt)
 
-        payload_headers = {"Accept": "*/*"}
+        payload_headers = {"Accept": "*/*"} if expect_binary else {"Accept": "application/json"}
         if not parsed_url.scheme and not parsed_url.netloc:  # is URL relative?
             payload_headers.update(get_auth_header(cfg.node_cls))
         if cfg.endpoint.headers:
@@ -790,7 +785,7 @@ async def _request_base(cfg: _RequestConfig, expect_binary: bool):
         except ProcessingInterrupted:
             logging.debug("Polling was interrupted by user")
             raise
-        except (ClientError, asyncio.TimeoutError, socket.gaierror) as e:
+        except (ClientError, OSError) as e:
             if attempt <= cfg.max_retries:
                 logging.warning(
                     "Connection error calling %s %s. Retrying in %.2fs (%d/%d): %s",
@@ -824,7 +819,7 @@ async def _request_base(cfg: _RequestConfig, expect_binary: bool):
                 delay *= cfg.retry_backoff
                 continue
             diag = await _diagnose_connectivity()
-            if diag.get("is_local_issue"):
+            if not diag["internet_accessible"]:
                 try:
                     request_logger.log_request_response(
                         operation_id=operation_id,

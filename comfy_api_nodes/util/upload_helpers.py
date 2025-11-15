@@ -13,8 +13,8 @@ from pydantic import BaseModel, Field
 
 from comfy_api.latest import IO, Input
 from comfy_api.util import VideoCodec, VideoContainer
-from comfy_api_nodes.apis import request_logger
 
+from . import request_logger
 from ._helpers import is_processing_interrupted, sleep_with_interrupt
 from .client import (
     ApiEndpoint,
@@ -290,7 +290,7 @@ async def upload_file(
                 return
         except asyncio.CancelledError:
             raise ProcessingInterrupted("Task cancelled") from None
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        except (aiohttp.ClientError, OSError) as e:
             if attempt <= max_retries:
                 with contextlib.suppress(Exception):
                     request_logger.log_request_response(
@@ -313,7 +313,7 @@ async def upload_file(
                 continue
 
             diag = await _diagnose_connectivity()
-            if diag.get("is_local_issue"):
+            if not diag["internet_accessible"]:
                 raise LocalNetworkError(
                     "Unable to connect to the network. Please check your internet connection and try again."
                 ) from e
