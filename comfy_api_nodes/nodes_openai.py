@@ -9,6 +9,7 @@ from PIL import Image
 from typing_extensions import override
 
 import folder_paths
+from comfy.utils import common_upscale
 from comfy_api.latest import IO, ComfyExtension, Input
 from comfy_api_nodes.apis.openai import (
     InputFileContent,
@@ -40,6 +41,9 @@ STARTING_POINT_ID_PATTERN = r"<starting_point_id:(.*)>"
 
 
 class SupportedOpenAIModel(str, Enum):
+    gpt_5_6_sol = "gpt-5.6-sol"
+    gpt_5_6_terra = "gpt-5.6-terra"
+    gpt_5_6_luna = "gpt-5.6-luna"
     gpt_5_5_pro = "gpt-5.5-pro"
     gpt_5_5 = "gpt-5.5"
     gpt_5 = "gpt-5"
@@ -62,7 +66,8 @@ async def validate_and_cast_response(response, timeout: int = None) -> torch.Ten
         timeout: Request timeout in seconds. Defaults to None (no timeout).
 
     Returns:
-        A torch.Tensor representing the image (1, H, W, C).
+        A torch.Tensor of shape (N, H, W, C) with all returned images; images whose
+        dimensions differ from the first image's are resized to match it.
 
     Raises:
         ValueError: If the response is not valid.
@@ -89,6 +94,14 @@ async def validate_and_cast_response(response, timeout: int = None) -> torch.Ten
         arr = np.asarray(pil_img).astype(np.float32) / 255.0
         image_tensors.append(torch.from_numpy(arr))
 
+    # With size="auto" the API can return images whose dimensions differ by a few pixels within a single response
+    # resize them to the first image's dimensions so they can be stacked into one batch.
+    ref_h, ref_w = image_tensors[0].shape[:2]
+    for i, t in enumerate(image_tensors):
+        if t.shape[:2] != (ref_h, ref_w):
+            samples = t.unsqueeze(0).movedim(-1, 1)
+            samples = common_upscale(samples, ref_w, ref_h, "bilinear", "center")
+            image_tensors[i] = samples.movedim(1, -1).squeeze(0)
     return torch.stack(image_tensors, dim=0)
 
 
@@ -99,7 +112,7 @@ class OpenAIDalle2(IO.ComfyNode):
         return IO.Schema(
             node_id="OpenAIDalle2",
             display_name="OpenAI DALL·E 2",
-            category="api node/image/OpenAI",
+            category="partner/image/OpenAI",
             description="Generates images synchronously via OpenAI's DALL·E 2 endpoint.",
             inputs=[
                 IO.String.Input(
@@ -249,7 +262,7 @@ class OpenAIDalle3(IO.ComfyNode):
         return IO.Schema(
             node_id="OpenAIDalle3",
             display_name="OpenAI DALL·E 3",
-            category="api node/image/OpenAI",
+            category="partner/image/OpenAI",
             description="Generates images synchronously via OpenAI's DALL·E 3 endpoint.",
             inputs=[
                 IO.String.Input(
@@ -371,7 +384,7 @@ class OpenAIGPTImage1(IO.ComfyNode):
         return IO.Schema(
             node_id="OpenAIGPTImage1",
             display_name="OpenAI GPT Image 2",
-            category="api node/image/OpenAI",
+            category="partner/image/OpenAI",
             description="Generates images synchronously via OpenAI's GPT Image endpoint.",
             is_deprecated=True,
             inputs=[
@@ -695,7 +708,7 @@ class OpenAIGPTImageNodeV2(IO.ComfyNode):
         return IO.Schema(
             node_id="OpenAIGPTImageNodeV2",
             display_name="OpenAI GPT Image 2",
-            category="api node/image/OpenAI",
+            category="partner/image/OpenAI",
             description="Generates images via OpenAI's GPT Image endpoint.",
             inputs=[
                 IO.String.Input(
@@ -962,7 +975,7 @@ class OpenAIChatNode(IO.ComfyNode):
         return IO.Schema(
             node_id="OpenAIChatNode",
             display_name="OpenAI ChatGPT",
-            category="api node/text/OpenAI",
+            category="partner/text/OpenAI",
             essentials_category="Text Generation",
             description="Generate text responses from an OpenAI model.",
             inputs=[
@@ -1051,6 +1064,21 @@ class OpenAIChatNode(IO.ComfyNode):
                   : $contains($m, "gpt-4.1") ? {
                     "type": "list_usd",
                     "usd": [0.002, 0.008],
+                    "format": { "approximate": true, "separator": "-", "suffix": " per 1K tokens" }
+                  }
+                  : $contains($m, "gpt-5.6-terra") ? {
+                    "type": "list_usd",
+                    "usd": [0.0025, 0.015],
+                    "format": { "approximate": true, "separator": "-", "suffix": " per 1K tokens" }
+                  }
+                  : $contains($m, "gpt-5.6-luna") ? {
+                    "type": "list_usd",
+                    "usd": [0.001, 0.006],
+                    "format": { "approximate": true, "separator": "-", "suffix": " per 1K tokens" }
+                  }
+                  : $contains($m, "gpt-5.6") ? {
+                    "type": "list_usd",
+                    "usd": [0.005, 0.03],
                     "format": { "approximate": true, "separator": "-", "suffix": " per 1K tokens" }
                   }
                   : $contains($m, "gpt-5.5-pro") ? {
@@ -1201,7 +1229,7 @@ class OpenAIInputFiles(IO.ComfyNode):
         return IO.Schema(
             node_id="OpenAIInputFiles",
             display_name="OpenAI ChatGPT Input Files",
-            category="api node/text/OpenAI",
+            category="partner/text/OpenAI",
             description="Loads and prepares input files (text, pdf, etc.) to include as inputs for the OpenAI Chat Node. The files will be read by the OpenAI model when generating a response. 🛈 TIP: Can be chained together with other OpenAI Input File nodes.",
             inputs=[
                 IO.Combo.Input(
@@ -1248,7 +1276,7 @@ class OpenAIChatConfig(IO.ComfyNode):
         return IO.Schema(
             node_id="OpenAIChatConfig",
             display_name="OpenAI ChatGPT Advanced Options",
-            category="api node/text/OpenAI",
+            category="partner/text/OpenAI",
             description="Allows specifying advanced configuration options for the OpenAI Chat Nodes.",
             inputs=[
                 IO.Combo.Input(
