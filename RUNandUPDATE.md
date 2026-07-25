@@ -1,4 +1,3 @@
-<div align="center">
 # ComfyUI
 
 ## Installation and Update Guide
@@ -31,7 +30,7 @@
 4. **Update ComfyUI**:
     To update ComfyUI to the latest version, run the following commands:
     ```bash
-     git pull origin main
+     git pull origin master
      git diff 'HEAD@{1}' HEAD -- requirements.txt
     ```
     If there are changes in `requirements.txt`, reinstall the dependencies:
